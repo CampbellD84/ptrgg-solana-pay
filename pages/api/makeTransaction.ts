@@ -9,6 +9,11 @@ export type MakeTransactionInputData = {
   account: string
 }
 
+type MakeTransactionGetResponse = {
+  label: string,
+  icon: string
+}
+
 export type MakeTransactionOutputData = {
   transaction: string,
   message: string
@@ -18,7 +23,17 @@ type ErrorOutput = {
   error: string
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+function get(res: NextApiResponse<MakeTransactionGetResponse>) {
+  res.status(200).json({
+    label: "Cookies Inc",
+    icon: "https://freesvg.org/img/1370962427.png"
+  })
+}
+
+async function post(
+  req: NextApiRequest,
+  res: NextApiResponse<MakeTransactionOutputData | ErrorOutput>
+) {
   try {
     const amount = calculatePrice(req.query)
     if (amount.toNumber() === 0) {
@@ -61,7 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       usdcAddress,
       shopUsdcAddress,
       buyerPublicKey,
-      amount.toNumber() * (10 ** (await usdcMint).decimals),
+      amount.toNumber() * (10 ** usdcMint.decimals),
       usdcMint.decimals
     )
 
@@ -88,5 +103,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     res.status(500).json({ error: 'error creating transaction' })
     return
+  }
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<MakeTransactionGetResponse | MakeTransactionOutputData | ErrorOutput>
+) {
+  if (req.method === "GET") {
+    return get(res)
+  } else if (req.method === "POST") {
+    return await post(req, res)
+  } else {
+    return res.status(405).json({ error: "Method not allowed" })
   }
 }

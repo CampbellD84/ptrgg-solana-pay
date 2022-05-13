@@ -1,4 +1,4 @@
-import { createQR, encodeURL, TransferRequestURLFields, findReference, validateTransfer, FindReferenceError, ValidateTransferError } from '@solana/pay'
+import { createQR, encodeURL, TransferRequestURLFields, findReference, validateTransfer, FindReferenceError, ValidateTransferError, TransactionRequestURLFields } from '@solana/pay'
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base'
 import { clusterApiUrl, Connection, Keypair } from '@solana/web3.js'
 import { useRouter } from 'next/router'
@@ -18,24 +18,34 @@ export default function Checkout() {
 
   const reference = useMemo(() => Keypair.generate().publicKey, [])
 
+  const searchParams = new URLSearchParams({ reference: reference.toString() })
+  for (const [key, value] of Object.entries(router.query)) {
+    if (value) {
+      if (Array.isArray(value)) {
+        for (const v of value) {
+          searchParams.append(key, v)
+        }
+      } else {
+        searchParams.append(key, value)
+      }
+    }
+  }
+
   const network = WalletAdapterNetwork.Devnet
   const endpoint = clusterApiUrl(network)
   const connection = new Connection(endpoint)
 
-  const urlParams: TransferRequestURLFields = {
-    recipient: shopAddress,
-    splToken: usdcAddress,
-    amount,
-    reference,
-    label: "Cookies Inc",
-    message: "Thanks for your order! 🍪"
-  }
-
-  const url = encodeURL(urlParams)
-  console.log({ url })
-
   useEffect(() => {
-    const qr = createQR(url, 512, 'transparent')
+    const { location } = window
+    const apiUrl = `${location.protocol}//${location.host}/api/makeTransaction?${searchParams.toString()}`
+    const urlParams: TransactionRequestURLFields = {
+      link: new URL(apiUrl),
+      label: "Cookies Inc",
+      message: "Thanks for your order! 🍪"
+    }
+
+    const solanaUrl = encodeURL(urlParams)
+    const qr = createQR(solanaUrl, 512, 'transparent')
     if (qrRef.current && amount.isGreaterThan(0)) {
       qrRef.current.innerHTML = ''
       qr.append(qrRef.current)
