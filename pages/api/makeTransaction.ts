@@ -1,9 +1,11 @@
-import { createTransferCheckedInstruction, getAssociatedTokenAddress, getMint } from "@solana/spl-token";
+import { createTransferCheckedInstruction, getAssociatedTokenAddress, getMint, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { WalletAdapterNetwork } from "@solana/wallet-adapter-base";
-import { clusterApiUrl, Connection, PublicKey, Transaction } from "@solana/web3.js";
+import { clusterApiUrl, Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { NextApiRequest, NextApiResponse } from "next";
-import { shopAddress, usdcAddress } from "../../lib/addresses"
+import { couponAddress, shopAddress, usdcAddress } from "../../lib/addresses"
 import calculatePrice from "../../lib/calculatePrice"
+import base58 from "bs58";
+
 
 export type MakeTransactionInputData = {
   account: string
@@ -53,12 +55,29 @@ async function post(
       return
     }
 
+    const shopPrivateKey = process.env.SHOP_PRIVATE_KEY as string
+    if (!shopPrivateKey) {
+      res.status(500).json({ error: "Shop private key not available" })
+    }
+    const shopKeypair = Keypair.fromSecretKey(base58.decode(shopPrivateKey))
+
     const buyerPublicKey = new PublicKey(account)
-    const shopPublicKey = shopAddress
+    const shopPublicKey = shopKeypair.publicKey
 
     const network = WalletAdapterNetwork.Devnet
     const endpoint = clusterApiUrl(network)
     const connection = new Connection(endpoint)
+
+    const buyerCouponAccount = await getOrCreateAssociatedTokenAccount(
+      connection,
+      shopKeypair,
+      couponAddress,
+      buyerPublicKey
+    )
+
+    const shopCouponAddress = await getAssociatedTokenAddress(couponAddress, shopPublicKey)
+
+    const buyerGetsCouponDiscount = buyerCouponAccount.amount >= 5
 
     const usdcMint = await getMint(connection, usdcAddress)
     const buyerUsdcAddress = await getAssociatedTokenAddress(usdcAddress, buyerPublicKey)
@@ -71,12 +90,14 @@ async function post(
       feePayer: buyerPublicKey
     })
 
+    const amountToPay = buyerGetsCouponDiscount ? amount.dividedBy(2) : amount
+
     const transferInstruction = createTransferCheckedInstruction(
       buyerUsdcAddress,
       usdcAddress,
       shopUsdcAddress,
       buyerPublicKey,
-      amount.toNumber() * (10 ** usdcMint.decimals),
+      amountToPay.toNumber() * (10 ** usdcMint.decimals),
       usdcMint.decimals
     )
 
@@ -86,7 +107,34 @@ async function post(
       isWritable: false
     })
 
-    transaction.add(transferInstruction)
+    const couponInstruction = buyerGetsCouponDiscount ?
+      createTransferCheckedInstruction(
+        buyerCouponAccount.address,
+        couponAddress,
+        shopCouponAddress,
+        buyerPublicKey,
+        5,
+        0
+      ) :
+
+      createTransferCheckedInstruction(
+        shopCouponAddress,
+        couponAddress,
+        buyerCouponAccount.address,
+        shopPublicKey,
+        1,
+        0
+      )
+
+    couponInstruction.keys.push({
+      pubkey: shopPublicKey,
+      isSigner: true,
+      isWritable: false
+    })
+
+    transaction.add(transferInstruction, couponInstruction)
+
+    transaction.partialSign(shopKeypair)
 
     const serializedTransaction = transaction.serialize({
       requireAllSignatures: false
@@ -94,9 +142,11 @@ async function post(
 
     const base64 = serializedTransaction.toString('base64')
 
+    const message = buyerGetsCouponDiscount ? "50% Discount! 🍪" : "Thanks for your order! 🍪"
+
     res.status(200).json({
       transaction: base64,
-      message: "Thanks for your order! 🍪"
+      message
     })
   } catch (err) {
     console.error(err)
